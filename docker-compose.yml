@@ -1,0 +1,121 @@
+version: '2'
+services:
+  dataloop:
+    image: dataloop/dataloop-docker:latest
+    container_name: dataloop
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    environment:
+      - API_KEY=<<Dataloop API Key>>
+
+  datadog:
+    image: datadog/docker-dd-agent:latest-alpine
+    container_name: datadog
+    volumes:
+      - /var/run:/var/run:rw
+      - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /proc/:/host/proc/:ro
+    environment:
+      - API_KEY=<<Datadog API Key>>
+
+  zabbix-db:
+    image: monitoringartist/zabbix-db-mariadb
+    container_name: zabbix-db
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - 3306:3306
+    environment:
+      - MARIADB_USER=zabbix
+      - MARIADB_PASS=my_password
+  zabbix-server:
+    image: monitoringartist/zabbix-3.0-xxl:latest
+    container_name: zabbix-server
+    depends_on:
+      - zabbix-db
+    ports:
+      - "80:80"
+      - "10051:10051"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+    links:
+      - zabbix-db:zabbix.db
+    environment:
+      - ZS_DBHost=zabbix.db
+      - ZS_DBUser=zabbix
+      - ZS_DBPassword=my_password
+      - ZA_enabled=false
+  zabbix-agent:
+    image: monitoringartist/zabbix-agent-xxl-limited:latest
+    container_name: zabbix-agent
+    depends_on:
+      - zabbix-server
+    ports:
+      - "10050:10050"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /:/rootfs
+      - /var/run:/var/run
+    links:
+      - zabbix-server:zabbix.server
+    environment:
+      - ZA_Server=zabbix.server
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - 9090:9090
+    depends_on:
+      - cadvisor
+  node-exporter:
+    image: prom/node-exporter
+    container_name: node-exporter
+    ports:
+      - 9100:9100
+
+  cadvisor:
+    image: google/cadvisor
+    container_name: cadvisor
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - 8080:8080
+
+  grafana:
+    image: monitoringartist/grafana-xxl:latest
+    container_name: grafana
+    depends_on:
+      - prometheus
+      - zabbix-server
+    ports:
+      - 3000:3000
+
+  consul:
+    image: consul:latest
+    container_name: consul
+    ports:
+      - "8300"
+      - "8400"
+      - "8500:8500"
+      - "53"
+    environment:
+      - 'CONSUL_LOCAL_CONFIG={"skip_leave_on_interrupt": true, "datacenter": "overmonitoring", "node_name": "overmonitoring", "log_level": "INFO","data_dir": "/tmp"}'
+    command: agent -server -ui -bootstrap -client 0.0.0.0
+  registrator:
+    image: gliderlabs/registrator:master
+    container_name: registrator
+    depends_on:
+      - consul
+    links:
+      - consul:consul
+    volumes:
+      - "/var/run/docker.sock:/tmp/docker.sock"
+    command: -resync 10 -tags over-monitoring consul://consul:8500
